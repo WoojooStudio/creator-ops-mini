@@ -1,0 +1,6 @@
+node_modules/
+.pgdata/
+.n8n-home/
+.spike/
+.env
+.DS_Store

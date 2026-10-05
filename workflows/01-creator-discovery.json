@@ -1,0 +1,375 @@
+{
+  "id": "creatorOps000001",
+  "name": "01 · Creator discovery → CRM sync",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Run now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "id": "creatorOps000001-00",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "name": "Every day 07:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "id": "creatorOps000001-01",
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "name": "Discovery settings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "// Brand keywords and follower band for this program.\nconst settings = {\n  keywords: ['ai voice', 'text to speech', 'ai tools'],\n  minFollowers: 10000,\n  maxFollowers: 500000,\n};\nreturn settings.keywords.map(keyword => ({ json: { keyword, ...settings } }));"
+      },
+      "id": "creatorOps000001-02",
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "name": "Live YouTube API?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "flag",
+              "leftValue": "={{ $env.LIVE_YOUTUBE }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "creatorOps000001-03",
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "name": "YouTube · search channels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "youtubeApiKey001",
+          "name": "YouTube Data API key"
+        }
+      },
+      "parameters": {
+        "url": "https://www.googleapis.com/youtube/v3/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "snippet"
+            },
+            {
+              "name": "type",
+              "value": "channel"
+            },
+            {
+              "name": "maxResults",
+              "value": "25"
+            },
+            {
+              "name": "q",
+              "value": "={{ $json.keyword }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "creatorOps000001-04",
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "name": "Collect channel ids",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const settings = $('Discovery settings').all();\nconst nicheById = {};\n$input.all().forEach((item, i) => {\n  for (const r of item.json.items || []) nicheById[r.id.channelId] ??= settings[i]?.json.keyword;\n});\nconst ids = Object.keys(nicheById).slice(0, 50);\nif (!ids.length) return [];\nreturn [{ json: { ids: ids.join(','), nicheById } }];"
+      },
+      "id": "creatorOps000001-05",
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "name": "YouTube · channel stats",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "youtubeApiKey001",
+          "name": "YouTube Data API key"
+        }
+      },
+      "parameters": {
+        "url": "https://www.googleapis.com/youtube/v3/channels",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "snippet,statistics"
+            },
+            {
+              "name": "maxResults",
+              "value": "50"
+            },
+            {
+              "name": "id",
+              "value": "={{ $json.ids }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "creatorOps000001-06",
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "name": "Normalize (live)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const { nicheById } = $('Collect channel ids').first().json;\nreturn ($input.first().json.items || []).map(ch => ({ json: {\n  channel_id: ch.id,\n  handle: ch.snippet.customUrl || ch.snippet.title,\n  followers: ch.statistics.hiddenSubscriberCount ? 0 : Number(ch.statistics.subscriberCount || 0),\n  niche: nicheById[ch.id] || null,\n} }));"
+      },
+      "id": "creatorOps000001-07",
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "name": "Fixture channels",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "// Offline fixture shaped like the normalized YouTube result. Fictional channels.\n// A small daily drift in follower counts shows re-runs refresh rows instead of duplicating them.\nconst drift = Number(new Date().toISOString().slice(0, 10).replaceAll('-', '')) % 7;\nconst pool = [\n  ['UC_demo_aria',  '@aria.builds',      84000, 'ai tools'],\n  ['UC_demo_jonas', '@jonas.voices',     41000, 'text to speech'],\n  ['UC_demo_mei',   '@mei.makes.ai',    152000, 'ai voice'],\n  ['UC_demo_noor',  '@noor.narrates',    23500, 'ai voice'],\n  ['UC_demo_lukas', '@lukas.dubs',       67800, 'ai voice'],\n  ['UC_demo_sofia', '@sofia.podcasts',  310000, 'text to speech'],\n  ['UC_demo_kenji', '@kenji.codes',      18900, 'ai tools'],\n  ['UC_demo_ola',   '@ola.creates',       4200, 'ai tools'],        // below band\n  ['UC_demo_mega',  '@mega.tech.daily', 2400000, 'ai tools'],       // above band\n  ['UC_demo_noor',  '@noor.narrates',    23500, 'text to speech'],  // found by two keywords\n];\nreturn pool.map(([channel_id, handle, followers, niche]) =>\n  ({ json: { channel_id, handle, followers: followers + drift * 37, niche } }));"
+      },
+      "id": "creatorOps000001-08",
+      "position": [
+        780,
+        200
+      ]
+    },
+    {
+      "name": "Filter band + dedupe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const { minFollowers, maxFollowers } = $('Discovery settings').first().json;\nconst keep = new Map();\nlet outOfBand = 0;\nfor (const { json: c } of $input.all()) {\n  if (c.followers < minFollowers || c.followers > maxFollowers) { outOfBand++; continue; }\n  if (!keep.has(c.channel_id)) keep.set(c.channel_id, c);\n}\nif (!keep.size) return [];\nreturn [{ json: { rows: [...keep.values()], outOfBand } }];"
+      },
+      "id": "creatorOps000001-09",
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "name": "Upsert creators + log + notify",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH x AS (\n  SELECT * FROM jsonb_to_recordset($1::jsonb)\n    AS x(channel_id text, handle text, followers int, niche text)\n), up AS (\n  INSERT INTO creators (channel_id, handle, followers, niche)\n  SELECT channel_id, handle, followers, niche FROM x\n  ON CONFLICT (channel_id) DO UPDATE\n    SET followers = EXCLUDED.followers, handle = EXCLUDED.handle, updated_at = now()\n  RETURNING id, handle, followers, (xmax = 0) AS inserted\n), ev AS (\n  INSERT INTO events (workflow, entity, entity_id, action, detail)\n  SELECT '01-discovery', 'creator', id::text,\n         CASE WHEN inserted THEN 'discovered' ELSE 'refreshed' END,\n         jsonb_build_object('followers', followers)\n  FROM up\n  RETURNING 1\n), n AS (\n  INSERT INTO notifications (channel, text, dedupe_key)\n  SELECT '#creator-ops',\n         'New creators found: ' || string_agg(handle || ' (' || followers || ')', ', '),\n         'discovery:' || current_date\n  FROM up WHERE inserted\n  HAVING count(*) > 0\n  ON CONFLICT (dedupe_key) DO NOTHING\n  RETURNING 1\n)\nSELECT (SELECT count(*) FROM up WHERE inserted)::int     AS new_creators,\n       (SELECT count(*) FROM up WHERE NOT inserted)::int AS refreshed,\n       $2::int                                       AS skipped_out_of_band",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.rows), $json.outOfBand ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "creatorOpsPg01",
+          "name": "Creator Ops DB"
+        }
+      },
+      "id": "creatorOps000001-10",
+      "position": [
+        2080,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Discovery settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every day 07:00": {
+      "main": [
+        [
+          {
+            "node": "Discovery settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discovery settings": {
+      "main": [
+        [
+          {
+            "node": "Live YouTube API?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Live YouTube API?": {
+      "main": [
+        [
+          {
+            "node": "YouTube · search channels",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fixture channels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube · search channels": {
+      "main": [
+        [
+          {
+            "node": "Collect channel ids",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect channel ids": {
+      "main": [
+        [
+          {
+            "node": "YouTube · channel stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube · channel stats": {
+      "main": [
+        [
+          {
+            "node": "Normalize (live)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize (live)": {
+      "main": [
+        [
+          {
+            "node": "Filter band + dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fixture channels": {
+      "main": [
+        [
+          {
+            "node": "Filter band + dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter band + dedupe": {
+      "main": [
+        [
+          {
+            "node": "Upsert creators + log + notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "creatorOps000000"
+  },
+  "pinData": {},
+  "tags": []
+}

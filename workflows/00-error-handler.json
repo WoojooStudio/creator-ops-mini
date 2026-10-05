@@ -1,0 +1,85 @@
+{
+  "id": "creatorOps000000",
+  "name": "00 · Error handler",
+  "active": false,
+  "nodes": [
+    {
+      "name": "On any workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "id": "creatorOps000000-00",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "name": "Format alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const { execution = {}, workflow = {} } = $input.first().json;\nconst err = execution.error || {};\nconst text = [\n  `:rotating_light: *${workflow.name || 'unknown workflow'}* failed`,\n  `Node: ${execution.lastNodeExecuted || '?'}`,\n  `Error: ${(err.message || 'no message').slice(0, 300)}`,\n  execution.url ? `Execution: ${execution.url}` : null,\n].filter(Boolean).join('\\n');\nreturn [{ json: {\n  workflow: workflow.name || 'unknown',\n  execution_id: String(execution.id ?? ''),\n  detail: { node: execution.lastNodeExecuted, message: err.message, mode: execution.mode },\n  text,\n} }];"
+      },
+      "id": "creatorOps000000-01",
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "name": "Log + queue alert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH e AS (\n  INSERT INTO events (workflow, entity, entity_id, action, detail)\n  VALUES ($1, 'execution', $2, 'failed', $3::jsonb)\n  RETURNING id\n)\n-- one alert per workflow per hour: a broken API can't flood the channel\nINSERT INTO notifications (channel, text, dedupe_key)\nSELECT '#automation-alerts', $4, 'alert:' || $1 || ':' || to_char(now(), 'YYYY-MM-DD\"T\"HH24')\nFROM e\nON CONFLICT (dedupe_key) DO NOTHING\nRETURNING id AS notification_id",
+        "options": {
+          "queryReplacement": "={{ [ $json.workflow, $json.execution_id, JSON.stringify($json.detail), $json.text ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "creatorOpsPg01",
+          "name": "Creator Ops DB"
+        }
+      },
+      "id": "creatorOps000000-02",
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "On any workflow error": {
+      "main": [
+        [
+          {
+            "node": "Format alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format alert": {
+      "main": [
+        [
+          {
+            "node": "Log + queue alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "tags": []
+}

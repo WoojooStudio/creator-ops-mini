@@ -1,0 +1,388 @@
+{
+  "id": "creatorOps000005",
+  "name": "05 · Metrics → ROI report",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Run now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "id": "creatorOps000005-00",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "name": "Every day 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "creatorOps000005-01",
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "name": "Live posts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT d.id AS deliverable_id, d.platform_post_id, d.posted_at,\n       current_date::text AS today   -- snapshot date follows the DB's timezone\nFROM deliverables d\nWHERE d.verified_at IS NOT NULL\nORDER BY d.id",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "creatorOpsPg01",
+          "name": "Creator Ops DB"
+        }
+      },
+      "id": "creatorOps000005-02",
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "name": "Live YouTube API?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "flag",
+              "leftValue": "={{ $env.LIVE_YOUTUBE }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "creatorOps000005-03",
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "name": "Batch video ids",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "return [{ json: { ids: $input.all().map(i => i.json.platform_post_id).join(',') } }];"
+      },
+      "id": "creatorOps000005-04",
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "name": "YouTube · video stats",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "youtubeApiKey001",
+          "name": "YouTube Data API key"
+        }
+      },
+      "parameters": {
+        "url": "https://www.googleapis.com/youtube/v3/videos",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "statistics"
+            },
+            {
+              "name": "id",
+              "value": "={{ $json.ids }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "creatorOps000005-05",
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "name": "Shape snapshots (live)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "// YouTube returns lifetime totals; we store one snapshot per day.\n// Clicks come from the link shortener, not YouTube — not wired in this demo, so 0.\nconst byVideo = Object.fromEntries($('Live posts').all().map(i => [i.json.platform_post_id, i.json.deliverable_id]));\nconst day = $('Live posts').first().json.today;\nconst rows = ($input.first().json.items || []).map(v => ({\n  deliverable_id: byVideo[v.id], day,\n  views: Number(v.statistics.viewCount || 0),\n  likes: Number(v.statistics.likeCount || 0),\n  comments: Number(v.statistics.commentCount || 0),\n  clicks: 0,\n}));\nreturn [{ json: { rows } }];"
+      },
+      "id": "creatorOps000005-06",
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "name": "Fixture snapshots",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "// Offline fixture: a saturating curve per post, one snapshot per day since posting\n// (so a single run backfills history). Deterministic per deliverable.\nconst rows = [];\nfor (const { json: p } of $input.all()) {\n  const today = new Date(p.today);\n  const posted = new Date(new Date(p.posted_at).toISOString().slice(0, 10));\n  const reach = 20000 + (Number(p.deliverable_id) * 7919) % 30000;\n  for (let d = new Date(posted), k = 1; d <= today; d = new Date(d.getTime() + 864e5), k++) {\n    const views = Math.round(reach * (1 - Math.exp(-k / 3)));\n    rows.push({\n      deliverable_id: p.deliverable_id, day: d.toISOString().slice(0, 10),\n      views, likes: Math.round(views * 0.042), comments: Math.round(views * 0.006),\n      clicks: Math.round(views * 0.018),\n    });\n  }\n}\nreturn [{ json: { rows } }];"
+      },
+      "id": "creatorOps000005-07",
+      "position": [
+        780,
+        200
+      ]
+    },
+    {
+      "name": "Upsert snapshots",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH x AS (\n  SELECT * FROM jsonb_to_recordset($1::jsonb)\n    AS x(deliverable_id bigint, day date, views int, likes int, comments int, clicks int)\n), up AS (\n  INSERT INTO metrics_daily (deliverable_id, day, views, likes, comments, clicks)\n  SELECT deliverable_id, day, views, likes, comments, clicks FROM x\n  ON CONFLICT (deliverable_id, day) DO UPDATE\n    SET views = EXCLUDED.views, likes = EXCLUDED.likes,\n        comments = EXCLUDED.comments, clicks = EXCLUDED.clicks\n  RETURNING 1\n), ev AS (\n  INSERT INTO events (workflow, entity, action, detail)\n  SELECT '05-metrics', 'metrics_daily', 'upserted', jsonb_build_object('rows', count(*)) FROM up\n  RETURNING 1\n)\nSELECT count(*)::int AS snapshots_upserted FROM up",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.rows) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "creatorOpsPg01",
+          "name": "Creator Ops DB"
+        }
+      },
+      "id": "creatorOps000005-08",
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "name": "ROI by creator",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT r.*,\n       date_trunc('week', current_date)::date::text AS period_from,  -- Monday, in the DB's timezone\n       current_date::text                           AS period_to\nFROM campaign_roi r\nORDER BY campaign, cost_per_engagement NULLS LAST",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "creatorOpsPg01",
+          "name": "Creator Ops DB"
+        }
+      },
+      "id": "creatorOps000005-09",
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "name": "Build weekly report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst n = v => Number(v ?? 0);\nconst eur = v => v == null ? '—' : `€${n(v).toFixed(2)}`;\nconst { period_from: from, period_to: to } = rows[0] ?? {};\n\nconst live = rows.filter(r => n(r.views) > 0);\nconst spend = live.reduce((s, r) => s + n(r.cost_eur), 0);\nconst eng = live.reduce((s, r) => s + n(r.engagements), 0);\nconst views = live.reduce((s, r) => s + n(r.views), 0);\nconst blended = eng ? spend / eng : null;\nconst best = live.filter(r => r.cost_per_engagement != null)\n  .sort((a, b) => n(a.cost_per_engagement) - n(b.cost_per_engagement))[0];\n\nconst lines = [\n  `# Creator report — week of ${from}`,\n  '',\n  `Live posts: **${live.length}/${rows.length}** · Views: **${views.toLocaleString('en-US')}** · Spend on live posts: **${eur(spend)}** · Blended cost/engagement: **${eur(blended)}**`,\n  '',\n  '| Campaign | Creator | Cost | Views | Engagements | Cost / engagement | CTR |',\n  '|---|---|---:|---:|---:|---:|---:|',\n  ...rows.map(r => `| ${r.campaign} | ${r.handle} | ${eur(r.cost_eur)} | ${n(r.views).toLocaleString('en-US')} | ${n(r.engagements).toLocaleString('en-US')} | ${eur(r.cost_per_engagement)} | ${r.ctr_pct == null ? '—' : r.ctr_pct + '%'} |`),\n];\nconst summary = `Weekly creator report: ${live.length} live posts, ${views.toLocaleString('en-US')} views, blended ${eur(blended)}/engagement` +\n  (best ? `. Best: ${best.handle} at ${eur(best.cost_per_engagement)}/engagement` : '');\nreturn [{ json: { from, to, markdown: lines.join('\\n'), summary } }];"
+      },
+      "id": "creatorOps000005-10",
+      "position": [
+        2080,
+        0
+      ]
+    },
+    {
+      "name": "Save report + notify",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH r AS (\n  INSERT INTO reports (period_from, period_to, markdown)\n  VALUES ($1::date, $2::date, $3)\n  ON CONFLICT (period_from, period_to) DO UPDATE SET markdown = EXCLUDED.markdown, created_at = now()\n  RETURNING id\n), n AS (\n  INSERT INTO notifications (channel, text, dedupe_key)\n  SELECT '#creator-ops', $4 || ' (report #' || id || ')', 'report:' || $2\n  FROM r\n  ON CONFLICT (dedupe_key) DO NOTHING\n  RETURNING 1\n), ev AS (\n  INSERT INTO events (workflow, entity, entity_id, action)\n  SELECT '05-report', 'report', id::text, 'generated' FROM r\n  RETURNING 1\n)\nSELECT id AS report_id FROM r",
+        "options": {
+          "queryReplacement": "={{ [ $json.from, $json.to, $json.markdown, $json.summary ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "creatorOpsPg01",
+          "name": "Creator Ops DB"
+        }
+      },
+      "id": "creatorOps000005-11",
+      "position": [
+        2340,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Live posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every day 08:00": {
+      "main": [
+        [
+          {
+            "node": "Live posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Live posts": {
+      "main": [
+        [
+          {
+            "node": "Live YouTube API?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Live YouTube API?": {
+      "main": [
+        [
+          {
+            "node": "Batch video ids",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fixture snapshots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch video ids": {
+      "main": [
+        [
+          {
+            "node": "YouTube · video stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube · video stats": {
+      "main": [
+        [
+          {
+            "node": "Shape snapshots (live)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape snapshots (live)": {
+      "main": [
+        [
+          {
+            "node": "Upsert snapshots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fixture snapshots": {
+      "main": [
+        [
+          {
+            "node": "Upsert snapshots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert snapshots": {
+      "main": [
+        [
+          {
+            "node": "ROI by creator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ROI by creator": {
+      "main": [
+        [
+          {
+            "node": "Build weekly report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build weekly report": {
+      "main": [
+        [
+          {
+            "node": "Save report + notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "creatorOps000000"
+  },
+  "pinData": {},
+  "tags": []
+}

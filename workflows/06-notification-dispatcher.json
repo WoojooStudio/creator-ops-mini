@@ -1,0 +1,338 @@
+{
+  "id": "creatorOps000006",
+  "name": "06 · Notification dispatcher",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Run now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "id": "creatorOps000006-00",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "creatorOps000006-01",
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "name": "Pending notifications",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, channel, text FROM notifications\nWHERE status = 'pending'\nORDER BY id\nLIMIT 50",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "creatorOpsPg01",
+          "name": "Creator Ops DB"
+        }
+      },
+      "id": "creatorOps000006-02",
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "name": "Live Slack?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "flag",
+              "leftValue": "={{ $env.LIVE_SLACK }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "creatorOps000006-03",
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "name": "Route to Slack channel",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "// Creator DMs need Slack Connect / email in production; in the demo they go to one review channel.\nreturn $input.all().map(({ json: n }) => ({ json: {\n  id: n.id,\n  slack_channel: n.channel.startsWith('#') ? n.channel : '#creator-dms',\n  text: n.channel.startsWith('dm:') ? `[to ${n.channel.slice(3)}] ${n.text}` : n.text,\n} }));"
+      },
+      "id": "creatorOps000006-04",
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "name": "Slack · chat.postMessage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "slackApi": {
+          "id": "slackBotToken001",
+          "name": "Slack bot (creator-ops)"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: $json.slack_channel, text: $json.text }) }}",
+        "options": {}
+      },
+      "id": "creatorOps000006-05",
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "name": "Check Slack responses",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "// Slack answers HTTP 200 even on failure — the real status is in `ok`.\nconst sent = [], failed = [];\nconst routed = $('Route to Slack channel').all();\n$input.all().forEach((item, i) => (item.json.ok ? sent : failed).push({ id: routed[i].json.id, error: item.json.error }));\nreturn [{ json: { sent_ids: sent.map(s => s.id), failed } }];"
+      },
+      "id": "creatorOps000006-06",
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "name": "Mark sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE notifications SET status = 'sent', sent_at = now()\nWHERE id IN (SELECT jsonb_array_elements_text($1::jsonb)::bigint)\nRETURNING id",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.sent_ids) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "creatorOpsPg01",
+          "name": "Creator Ops DB"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "creatorOps000006-07",
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "name": "Raise if any failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "// Failed rows stay 'pending' and are retried next minute; this raises an alert via the error handler.\nconst { failed } = $('Check Slack responses').first().json;\nif (failed.length) throw new Error(`Slack rejected ${failed.length} message(s): ${failed.map(f => `#${f.id} ${f.error}`).join(', ')}`);\nreturn [{ json: { sent: $('Check Slack responses').first().json.sent_ids.length } }];"
+      },
+      "id": "creatorOps000006-08",
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "name": "Collect dry-run ids",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "return [{ json: { ids: $input.all().map(i => i.json.id) } }];"
+      },
+      "id": "creatorOps000006-09",
+      "position": [
+        780,
+        200
+      ]
+    },
+    {
+      "name": "Mark dry run",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE notifications SET status = 'dry_run', sent_at = now()\nWHERE id IN (SELECT jsonb_array_elements_text($1::jsonb)::bigint)\nRETURNING id, channel, text",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.ids) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "creatorOpsPg01",
+          "name": "Creator Ops DB"
+        }
+      },
+      "notes": "LIVE_SLACK is off: messages are recorded, not sent",
+      "notesInFlow": true,
+      "id": "creatorOps000006-10",
+      "position": [
+        1040,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Pending notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every minute": {
+      "main": [
+        [
+          {
+            "node": "Pending notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pending notifications": {
+      "main": [
+        [
+          {
+            "node": "Live Slack?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Live Slack?": {
+      "main": [
+        [
+          {
+            "node": "Route to Slack channel",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Collect dry-run ids",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route to Slack channel": {
+      "main": [
+        [
+          {
+            "node": "Slack · chat.postMessage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack · chat.postMessage": {
+      "main": [
+        [
+          {
+            "node": "Check Slack responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Slack responses": {
+      "main": [
+        [
+          {
+            "node": "Mark sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark sent": {
+      "main": [
+        [
+          {
+            "node": "Raise if any failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect dry-run ids": {
+      "main": [
+        [
+          {
+            "node": "Mark dry run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "creatorOps000000"
+  },
+  "pinData": {},
+  "tags": []
+}

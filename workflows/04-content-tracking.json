@@ -1,0 +1,289 @@
+{
+  "id": "creatorOps000004",
+  "name": "04 · Content tracking",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Run now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "id": "creatorOps000004-00",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "name": "Every 6 hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "creatorOps000004-01",
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "name": "Open deliverables",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT d.id, cr.channel_id, cr.handle, c.tracking_code, c.starts_on, d.due_on\nFROM deliverables d\nJOIN creators  cr ON cr.id = d.creator_id\nJOIN campaigns c  ON c.id  = d.campaign_id\nWHERE d.post_url IS NULL AND cr.status = 'contracted'\nORDER BY d.id",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "creatorOpsPg01",
+          "name": "Creator Ops DB"
+        }
+      },
+      "id": "creatorOps000004-02",
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "name": "Live YouTube API?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "flag",
+              "leftValue": "={{ $env.LIVE_YOUTUBE }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "creatorOps000004-03",
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "name": "YouTube · latest uploads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "youtubeApiKey001",
+          "name": "YouTube Data API key"
+        }
+      },
+      "parameters": {
+        "url": "https://www.googleapis.com/youtube/v3/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "snippet"
+            },
+            {
+              "name": "type",
+              "value": "video"
+            },
+            {
+              "name": "order",
+              "value": "date"
+            },
+            {
+              "name": "maxResults",
+              "value": "10"
+            },
+            {
+              "name": "channelId",
+              "value": "={{ $json.channel_id }}"
+            },
+            {
+              "name": "publishedAfter",
+              "value": "={{ new Date($json.starts_on).toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "creatorOps000004-04",
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "name": "Fixture uploads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "// Offline fixture shaped like YouTube search.list. One item per open deliverable, same order.\nconst daysAgo = n => new Date(Date.now() - n * 864e5).toISOString();\nconst uploads = {\n  UC_demo_aria:  [{ id: 'vid_aria_01',  title: 'I cloned my voice in 3 minutes', description: 'Made with a voice agent platform. Code VA-LAUNCH for 20% off.', at: daysAgo(3) }],\n  UC_demo_jonas: [{ id: 'vid_jonas_09', title: 'Weekly vlog',                    description: 'Just my week, no sponsor.',                                    at: daysAgo(1) }],\n};\nreturn $input.all().map(({ json: d }) => ({ json: {\n  items: (uploads[d.channel_id] || []).map(v => ({\n    id: { videoId: v.id }, snippet: { title: v.title, description: v.description, publishedAt: v.at },\n  })),\n} }));"
+      },
+      "id": "creatorOps000004-05",
+      "position": [
+        780,
+        200
+      ]
+    },
+    {
+      "name": "Find campaign post",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "// Pair each upload list with the deliverable it was fetched for, and look for the tracking code.\nconst open = $('Open deliverables').all();\nconst rows = [];\n$input.all().forEach((item, i) => {\n  const d = open[i].json;\n  const v = (item.json.items || []).find(v =>\n    `${v.snippet.title}\\n${v.snippet.description}`.includes(d.tracking_code));\n  if (v) rows.push({\n    deliverable_id: d.id,\n    video_id: v.id.videoId,\n    url: `https://www.youtube.com/watch?v=${v.id.videoId}`,\n    published_at: v.snippet.publishedAt,\n  });\n});\nif (!rows.length) return [];\nreturn [{ json: { rows } }];"
+      },
+      "id": "creatorOps000004-06",
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "name": "Mark live + route to finance",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH m AS (\n  SELECT * FROM jsonb_to_recordset($1::jsonb)\n    AS m(deliverable_id bigint, video_id text, url text, published_at timestamptz)\n), upd AS (\n  UPDATE deliverables d\n     SET post_url = m.url, platform_post_id = m.video_id,\n         posted_at = m.published_at, verified_at = now()\n    FROM m\n   WHERE d.id = m.deliverable_id AND d.post_url IS NULL\n  RETURNING d.id, d.creator_id, d.post_url\n), cr AS (\n  UPDATE creators c SET status = 'live', updated_at = now()\n    FROM upd WHERE c.id = upd.creator_id\n  RETURNING c.id, c.handle, c.rate_eur, upd.id AS deliverable_id, upd.post_url\n), pay AS (\n  -- content verified live → invoice can go to finance\n  INSERT INTO payments (deliverable_id, amount_eur)\n  SELECT deliverable_id, rate_eur FROM cr\n  ON CONFLICT (deliverable_id) DO NOTHING\n  RETURNING id\n), ev AS (\n  INSERT INTO events (workflow, entity, entity_id, action, detail)\n  SELECT '04-tracking', 'deliverable', deliverable_id::text, 'verified_live', jsonb_build_object('url', post_url)\n  FROM cr\n  RETURNING 1\n), n AS (\n  INSERT INTO notifications (channel, text, dedupe_key)\n  SELECT channel, text, key FROM (\n    SELECT '#creator-ops' AS channel, format('Live: %s posted %s', handle, post_url) AS text, 'live:' || deliverable_id AS key FROM cr\n    UNION ALL\n    SELECT '#finance', format('Invoice ready: %s — €%s for deliverable #%s (content verified live)', handle, rate_eur, deliverable_id), 'invoice:' || deliverable_id FROM cr\n  ) q\n  ON CONFLICT (dedupe_key) DO NOTHING\n  RETURNING 1\n)\nSELECT (SELECT count(*) FROM cr)::int AS verified_live, (SELECT count(*) FROM pay)::int AS invoices_routed",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.rows) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "creatorOpsPg01",
+          "name": "Creator Ops DB"
+        }
+      },
+      "id": "creatorOps000004-07",
+      "position": [
+        1300,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Open deliverables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 6 hours": {
+      "main": [
+        [
+          {
+            "node": "Open deliverables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Open deliverables": {
+      "main": [
+        [
+          {
+            "node": "Live YouTube API?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Live YouTube API?": {
+      "main": [
+        [
+          {
+            "node": "YouTube · latest uploads",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fixture uploads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube · latest uploads": {
+      "main": [
+        [
+          {
+            "node": "Find campaign post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fixture uploads": {
+      "main": [
+        [
+          {
+            "node": "Find campaign post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find campaign post": {
+      "main": [
+        [
+          {
+            "node": "Mark live + route to finance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "creatorOps000000"
+  },
+  "pinData": {},
+  "tags": []
+}

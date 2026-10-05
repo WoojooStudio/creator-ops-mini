@@ -1,0 +1,92 @@
+{
+  "id": "creatorOps000003",
+  "name": "03 · Content reminders",
+  "active": false,
+  "nodes": [
+    {
+      "name": "Run now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "id": "creatorOps000003-00",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "name": "Every day 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "creatorOps000003-01",
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "name": "Queue reminders + overdue alerts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH open AS (\n  SELECT d.id, cr.handle, c.name AS campaign, c.tracking_code, d.due_on\n  FROM deliverables d\n  JOIN creators  cr ON cr.id = d.creator_id\n  JOIN campaigns c  ON c.id  = d.campaign_id\n  WHERE d.post_url IS NULL AND cr.status = 'contracted'\n), reminders AS (\n  INSERT INTO notifications (channel, text, dedupe_key)\n  SELECT 'dm:' || handle,\n         format('Hi %s! Friendly reminder: your %s post is due %s. Please include %s in the description so we can track it.',\n                handle, campaign, to_char(due_on, 'Dy DD Mon'), tracking_code),\n         'reminder:' || id || ':' || current_date\n  FROM open\n  WHERE due_on BETWEEN current_date AND current_date + 2\n  ON CONFLICT (dedupe_key) DO NOTHING\n  RETURNING dedupe_key\n), overdue AS (\n  INSERT INTO notifications (channel, text, dedupe_key)\n  SELECT '#creator-ops',\n         format('Overdue: %s — %s was due %s (%s days ago)', handle, campaign, due_on, current_date - due_on),\n         'overdue:' || id || ':' || current_date\n  FROM open\n  WHERE due_on < current_date\n  ON CONFLICT (dedupe_key) DO NOTHING\n  RETURNING dedupe_key\n), ev AS (\n  INSERT INTO events (workflow, entity, entity_id, action)\n  SELECT '03-reminders', 'deliverable', split_part(dedupe_key, ':', 2), split_part(dedupe_key, ':', 1) || '_queued'\n  FROM (SELECT dedupe_key FROM reminders UNION ALL SELECT dedupe_key FROM overdue) q\n  RETURNING 1\n)\nSELECT (SELECT count(*) FROM reminders)::int AS reminders_queued,\n       (SELECT count(*) FROM overdue)::int   AS overdue_alerts_queued",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "creatorOpsPg01",
+          "name": "Creator Ops DB"
+        }
+      },
+      "id": "creatorOps000003-02",
+      "position": [
+        260,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Queue reminders + overdue alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every day 09:00": {
+      "main": [
+        [
+          {
+            "node": "Queue reminders + overdue alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "creatorOps000000"
+  },
+  "pinData": {},
+  "tags": []
+}

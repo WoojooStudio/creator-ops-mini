@@ -1,0 +1,15 @@
+{
+  "name": "creator-ops-mini",
+  "version": "1.0.0",
+  "description": "Creator program automation demo \u2014 n8n + Postgres",
+  "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "start": "bash -c \"source scripts/env.sh && n8n start\"",
+    "run:all": "bash scripts/run_all.sh"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "n8n": "^2.41.7"
+  },
+  "private": true
+}
