@@ -19,6 +19,16 @@ I built it for the *Automation Engineer – Influencers* application at ElevenLa
                   every state change ─► events (append-only audit trail)
 ```
 
+## In the n8n editor
+
+![01 Creator discovery → CRM sync](docs/img/n8n-01.png)
+![04 Content tracking → finance hand-off](docs/img/n8n-04.png)
+![05 Metrics → ROI report](docs/img/n8n-05.png)
+![06 Notification dispatcher](docs/img/n8n-06.png)
+![00 Error handler](docs/img/n8n-00.png)
+
+The workflows that call YouTube (01, 04, 05) have a **Live YouTube API?** switch: the upper branch calls the real API, the lower one uses fixtures with the same shape.
+
 ## What each workflow does
 
 | # | Workflow | Trigger | What it does |
